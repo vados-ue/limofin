@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LimoFin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar card">
+      <div>
+        <p class="eyebrow">LimoFin</p>
+        <h1>Bill-by-income cash flow planning</h1>
+        <p class="subtle">See which bills are funded, merely planned, or still missing an income source.</p>
+      </div>
+      <label class="month-control">
+        <span>Month</span>
+        <input id="monthPicker" type="month">
+      </label>
+    </header>
+
+    <section class="hero-grid">
+      <article class="hero card">
+        <p class="eyebrow">Cash Flow</p>
+        <div class="hero-metrics">
+          <div>
+            <p class="metric-label">Monthly Delta</p>
+            <p id="deltaValue" class="metric-value">$0.00</p>
+          </div>
+          <div>
+            <p class="metric-label">Coverage</p>
+            <p id="coverageValue" class="metric-value">0%</p>
+          </div>
+        </div>
+        <div class="hero-stats">
+          <div>
+            <span>Expected income</span>
+            <strong id="incomeTotal">$0.00</strong>
+          </div>
+          <div>
+            <span>Upcoming bills</span>
+            <strong id="billsTotal">$0.00</strong>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Quick Actions</p>
+            <h2>Capture changes fast</h2>
+          </div>
+        </div>
+        <div class="actions-row">
+          <button class="action-button" data-modal="billModal">Add Bill</button>
+          <button class="action-button" data-modal="sourceModal">Add Source</button>
+          <button class="action-button" data-modal="expenseModal">Add Expense</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="card table-card">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Upcoming Bills</p>
+            <h2>Funding status by due date</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Bill</th>
+                <th>Due</th>
+                <th>Amount</th>
+                <th>Source</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="billsTableBody"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card chart-card">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Bills Mix</p>
+            <h2>By category</h2>
+          </div>
+        </div>
+        <canvas id="billsChart" height="240"></canvas>
+      </article>
+
+      <article class="card chart-card wide">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Trend</p>
+            <h2>Last 6 months delta</h2>
+          </div>
+        </div>
+        <canvas id="deltaChart" height="140"></canvas>
+      </article>
+    </section>
+  </div>
+
+  <div id="toastRoot" class="toast-root"></div>
+
+  <dialog id="billModal" class="modal">
+    <form class="modal-form" data-endpoint="/api/bills">
+      <div class="modal-head">
+        <h3>Add Bill</h3>
+        <button type="button" class="ghost-button" data-close>Close</button>
+      </div>
+      <label><span>Name</span><input name="name" required></label>
+      <label><span>Category</span>
+        <select name="category">
+          <option value="other">Other</option>
+          <option value="mortgage">Mortgage</option>
+          <option value="cc">Credit Card</option>
+          <option value="utility">Utility</option>
+          <option value="insurance">Insurance</option>
+          <option value="subscription">Subscription</option>
+          <option value="loan">Loan</option>
+        </select>
+      </label>
+      <label><span>Amount (USD)</span><input name="amount_dollars" type="number" min="0" step="0.01" required></label>
+      <label><span>Due day</span><input name="due_day_of_month" type="number" min="1" max="31" required></label>
+      <label><span>Notes</span><textarea name="notes" rows="3"></textarea></label>
+      <button type="submit" class="submit-button">Save Bill</button>
+    </form>
+  </dialog>
+
+  <dialog id="sourceModal" class="modal">
+    <form class="modal-form" data-endpoint="/api/sources">
+      <div class="modal-head">
+        <h3>Add Income Source</h3>
+        <button type="button" class="ghost-button" data-close>Close</button>
+      </div>
+      <label><span>Name</span><input name="name" required></label>
+      <label><span>Type</span>
+        <select name="type">
+          <option value="paycheck">Paycheck</option>
+          <option value="transfer">Transfer</option>
+          <option value="freelance">Freelance</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+      <label><span>Amount (USD)</span><input name="amount_dollars" type="number" min="0" step="0.01" required></label>
+      <label><span>Frequency</span>
+        <select name="frequency">
+          <option value="monthly">Monthly</option>
+          <option value="biweekly">Biweekly</option>
+          <option value="weekly">Weekly</option>
+          <option value="quarterly">Quarterly</option>
+          <option value="annual">Annual</option>
+          <option value="oneoff">One-off</option>
+        </select>
+      </label>
+      <label><span>Next date</span><input name="next_date" type="date" required></label>
+      <button type="submit" class="submit-button">Save Source</button>
+    </form>
+  </dialog>
+
+  <dialog id="expenseModal" class="modal">
+    <form class="modal-form" data-endpoint="/api/expenses">
+      <div class="modal-head">
+        <h3>Add Expense</h3>
+        <button type="button" class="ghost-button" data-close>Close</button>
+      </div>
+      <label><span>Date</span><input name="date" type="date" required></label>
+      <label><span>Category</span><input name="category"></label>
+      <label><span>Amount (USD)</span><input name="amount_dollars" type="number" min="0" step="0.01" required></label>
+      <label><span>Description</span><textarea name="description" rows="3"></textarea></label>
+      <button type="submit" class="submit-button">Save Expense</button>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
