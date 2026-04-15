@@ -1,0 +1,25 @@
+{
+  "name": "limofin",
+  "version": "0.1.0",
+  "description": "Personal bill and cash flow planner with bill-to-income earmarks.",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test test/",
+    "migrate": "node -e \"const { openDatabase } = require('./server'); const db = openDatabase(process.env.DB_PATH); db.close(); console.log('Migrations complete');\""
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^8.0.0",
+    "node-cron": "^4.2.1"
+  },
+  "devDependencies": {
+    "supertest": "^7.0.0"
+  }
+}
