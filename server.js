@@ -195,6 +195,11 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 // safe integer so SQLite keeps the INTEGER affinity and rollups stay exact.
 const MAX_CENTS = 10000000000;
 
+const FLAG_SEVERITIES = ['info', 'warn', 'danger'];
+const MAX_VERDICT_LENGTH = 2000;
+const MAX_RUNWAY_LABEL_LENGTH = 120;
+const MAX_FLAG_TEXT_LENGTH = 1000;
+
 function isoToday() {
   // Server-local calendar day (NOT toISOString, which is UTC and rolls to
   // tomorrow every evening for anyone west of Greenwich).
@@ -253,12 +258,72 @@ function validatePlanPayload(payload) {
     return { name: envelope.name.trim(), allocated_cents: allocated };
   });
 
+  let verdict = null;
+  if (payload.verdict !== undefined && payload.verdict !== null && payload.verdict !== '') {
+    if (typeof payload.verdict !== 'string') {
+      throw new Error('verdict must be a string');
+    }
+    if (payload.verdict.length > MAX_VERDICT_LENGTH) {
+      throw new Error(`verdict must be at most ${MAX_VERDICT_LENGTH} characters`);
+    }
+    verdict = payload.verdict.trim() || null;
+  }
+
+  let floorCents = null;
+  if (payload.floor_cents !== undefined && payload.floor_cents !== null) {
+    if (!Number.isSafeInteger(payload.floor_cents) || payload.floor_cents < 0 || payload.floor_cents > MAX_CENTS) {
+      throw new Error('floor_cents must be a non-negative integer (cents, at most 10000000000)');
+    }
+    floorCents = payload.floor_cents;
+  }
+
+  const runway = payload.runway === undefined ? [] : payload.runway;
+  if (!Array.isArray(runway)) {
+    throw new Error('runway must be an array');
+  }
+  const normalizedRunway = runway.map((point) => {
+    if (!point || typeof point.label !== 'string' || !point.label.trim()) {
+      throw new Error('Each runway point needs a non-empty label');
+    }
+    const label = point.label.trim();
+    if (label.length > MAX_RUNWAY_LABEL_LENGTH) {
+      throw new Error(`Runway labels must be at most ${MAX_RUNWAY_LABEL_LENGTH} characters`);
+    }
+    // Runway points are projected balances, so negatives are allowed.
+    if (!Number.isSafeInteger(point.amount_cents) || Math.abs(point.amount_cents) > MAX_CENTS) {
+      throw new Error('Runway amount_cents must be an integer (cents, magnitude at most 10000000000)');
+    }
+    return { label, amount_cents: point.amount_cents };
+  });
+
+  const flags = payload.flags === undefined ? [] : payload.flags;
+  if (!Array.isArray(flags)) {
+    throw new Error('flags must be an array');
+  }
+  const normalizedFlags = flags.map((flag) => {
+    if (!flag || !FLAG_SEVERITIES.includes(flag.severity)) {
+      throw new Error(`Flag severity must be one of: ${FLAG_SEVERITIES.join(', ')}`);
+    }
+    if (typeof flag.text !== 'string' || !flag.text.trim()) {
+      throw new Error('Each flag needs non-empty text');
+    }
+    const text = flag.text.trim();
+    if (text.length > MAX_FLAG_TEXT_LENGTH) {
+      throw new Error(`Flag text must be at most ${MAX_FLAG_TEXT_LENGTH} characters`);
+    }
+    return { severity: flag.severity, text };
+  });
+
   return {
     week_start: payload.week_start,
     title: coerceValue(payload.title === undefined ? null : payload.title),
     notes: coerceValue(payload.notes === undefined ? null : payload.notes),
+    verdict,
+    floor_cents: floorCents,
     steps: normalizedSteps,
-    envelopes: normalizedEnvelopes
+    envelopes: normalizedEnvelopes,
+    runway: normalizedRunway,
+    flags: normalizedFlags
   };
 }
 
@@ -288,10 +353,24 @@ function getPlanDetail(db, planId) {
   const allocated = envelopes.reduce((sum, envelope) => sum + envelope.allocated_cents, 0);
   const spent = envelopes.reduce((sum, envelope) => sum + envelope.spent_cents, 0);
 
+  // Plans created before v0.2.1 have no plan_meta row, runway points, or
+  // flags: they come back as null / empty arrays, never an error.
+  const meta = db.prepare('SELECT verdict, floor_cents FROM plan_meta WHERE plan_id = ?').get(plan.id);
+  const runway = db.prepare(
+    'SELECT label, amount_cents FROM plan_runway_points WHERE plan_id = ? ORDER BY position, id'
+  ).all(plan.id);
+  const flags = db.prepare(
+    'SELECT severity, text FROM plan_flags WHERE plan_id = ? ORDER BY position, id'
+  ).all(plan.id);
+
   return {
     ...plan,
+    verdict: meta ? meta.verdict : null,
+    floor_cents: meta ? meta.floor_cents : null,
     steps,
     envelopes,
+    runway,
+    flags,
     totals: {
       allocated_cents: allocated,
       spent_cents: spent,
@@ -329,6 +408,22 @@ function createPlan(db, payload) {
       'INSERT INTO plan_envelopes (plan_id, name, allocated_cents, position) VALUES (?, ?, ?, ?)'
     );
     data.envelopes.forEach((envelope, index) => envelopeStmt.run(planId, envelope.name, envelope.allocated_cents, index));
+
+    if (data.verdict !== null || data.floor_cents !== null) {
+      db.prepare(
+        'INSERT INTO plan_meta (plan_id, verdict, floor_cents) VALUES (?, ?, ?)'
+      ).run(planId, data.verdict, data.floor_cents);
+    }
+
+    const runwayStmt = db.prepare(
+      'INSERT INTO plan_runway_points (plan_id, label, amount_cents, position) VALUES (?, ?, ?, ?)'
+    );
+    data.runway.forEach((point, index) => runwayStmt.run(planId, point.label, point.amount_cents, index));
+
+    const flagStmt = db.prepare(
+      'INSERT INTO plan_flags (plan_id, severity, text, position) VALUES (?, ?, ?, ?)'
+    );
+    data.flags.forEach((flag, index) => flagStmt.run(planId, flag.severity, flag.text, index));
 
     return planId;
   });
