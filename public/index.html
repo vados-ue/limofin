@@ -17,12 +17,19 @@
         <h1>Bill-by-income cash flow planning</h1>
         <p class="subtle">See which bills are funded, merely planned, or still missing an income source.</p>
       </div>
-      <label class="month-control">
-        <span>Month</span>
-        <input id="monthPicker" type="month">
-      </label>
+      <div class="topbar-controls">
+        <nav class="view-tabs" aria-label="Views">
+          <button type="button" class="action-button" data-view="dashboard">Dashboard</button>
+          <button type="button" class="ghost-button" data-view="plan">Week Plan</button>
+        </nav>
+        <label class="month-control">
+          <span>Month</span>
+          <input id="monthPicker" type="month">
+        </label>
+      </div>
     </header>
 
+    <div id="view-dashboard" class="view">
     <section class="hero-grid">
       <article class="hero card">
         <p class="eyebrow">Cash Flow</p>
@@ -107,6 +114,84 @@
         <canvas id="deltaChart" height="140"></canvas>
       </article>
     </section>
+    </div>
+
+    <div id="view-plan" class="view" hidden>
+      <section class="content-grid">
+        <article id="planEmpty" class="card wide" hidden>
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Week Plan</p>
+              <h2>No plan covers this week yet</h2>
+            </div>
+          </div>
+          <p class="subtle">Create a plan to set this week's checklist and spending envelopes.</p>
+          <div class="actions-row plan-empty-actions">
+            <button class="action-button" data-modal="planModal">Create Plan</button>
+          </div>
+        </article>
+
+        <article id="planEnvelopesCard" class="card table-card" hidden>
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Envelopes</p>
+              <h2>Spending limits</h2>
+            </div>
+            <button class="ghost-button" data-modal="planModal">New Plan</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Envelope</th>
+                  <th>Allocated</th>
+                  <th>Spent</th>
+                  <th>Remaining</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="envelopesTableBody"></tbody>
+            </table>
+          </div>
+          <p id="planTotals" class="subtle plan-totals"></p>
+        </article>
+
+        <article id="planStepsCard" class="card" hidden>
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Checklist</p>
+              <h2 id="planWeekLabel">This week</h2>
+            </div>
+            <span id="stepsProgress" class="subtle"></span>
+          </div>
+          <ul id="planStepsList" class="steps-list"></ul>
+        </article>
+
+        <article id="planSpendsCard" class="card table-card wide" hidden>
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Spending Log</p>
+              <h2>This week's spends</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Envelope</th>
+                  <th>Memo</th>
+                  <th>Amount</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="spendsTableBody"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </div>
   </div>
 
   <div id="toastRoot" class="toast-root"></div>
@@ -178,6 +263,34 @@
       <label><span>Amount (USD)</span><input name="amount_dollars" type="number" min="0" step="0.01" required></label>
       <label><span>Description</span><textarea name="description" rows="3"></textarea></label>
       <button type="submit" class="submit-button">Save Expense</button>
+    </form>
+  </dialog>
+
+  <dialog id="planModal" class="modal">
+    <form id="planForm" class="modal-form">
+      <div class="modal-head">
+        <h3>Create Week Plan</h3>
+        <button type="button" class="ghost-button" data-close>Close</button>
+      </div>
+      <label><span>Week start</span><input name="week_start" type="date" required></label>
+      <label><span>Title</span><input name="title" placeholder="Week of July 15"></label>
+      <label><span>Checklist steps (one per line)</span><textarea name="steps_lines" rows="4" placeholder="Pay Amex statement balance&#10;Move 150 to savings"></textarea></label>
+      <label><span>Envelopes (Name: dollars, one per line)</span><textarea name="envelope_lines" rows="4" placeholder="Groceries: 220&#10;Gas: 60"></textarea></label>
+      <button type="submit" class="submit-button">Save Plan</button>
+    </form>
+  </dialog>
+
+  <dialog id="spendModal" class="modal">
+    <form id="spendForm" class="modal-form">
+      <div class="modal-head">
+        <h3 id="spendModalTitle">Add Spend</h3>
+        <button type="button" class="ghost-button" data-close>Close</button>
+      </div>
+      <input type="hidden" name="envelope_id">
+      <label><span>Amount (USD)</span><input name="amount_dollars" type="number" min="0.01" step="0.01" required></label>
+      <label><span>Date</span><input name="date" type="date"></label>
+      <label><span>Memo</span><input name="memo" placeholder="Publix run"></label>
+      <button type="submit" class="submit-button">Save Spend</button>
     </form>
   </dialog>
 

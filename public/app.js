@@ -1,7 +1,10 @@
 const state = {
   month: '',
+  view: 'dashboard',
   cashflow: null,
   bills: [],
+  plan: null,
+  planLoaded: false,
   charts: {
     bills: null,
     delta: null
@@ -38,6 +41,16 @@ async function api(path, options = {}) {
     throw new Error(data.error || 'Request failed');
   }
   return data;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[ch]));
 }
 
 function showToast(message) {
@@ -175,6 +188,244 @@ async function loadDashboard(month) {
   await renderDeltaChart();
 }
 
+async function fetchCurrentPlan() {
+  const response = await fetch('/api/plans/current');
+  if (response.status === 404) {
+    return null;
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Request failed');
+  }
+  return data;
+}
+
+async function loadPlanView() {
+  state.plan = await fetchCurrentPlan();
+  state.planLoaded = true;
+  renderPlanView();
+}
+
+function envelopeStatusMeta(envelope) {
+  if (envelope.remaining_cents < 0) {
+    return { label: 'Over', className: 'status-red' };
+  }
+  if (envelope.allocated_cents > 0 && envelope.spent_cents / envelope.allocated_cents >= 0.8) {
+    return { label: 'Tight', className: 'status-yellow' };
+  }
+  return { label: 'On track', className: 'status-green' };
+}
+
+function renderPlanView() {
+  const plan = state.plan;
+  const hasPlan = Boolean(plan);
+
+  document.querySelector('#planEmpty').hidden = hasPlan;
+  document.querySelector('#planEnvelopesCard').hidden = !hasPlan;
+  document.querySelector('#planStepsCard').hidden = !hasPlan;
+  document.querySelector('#planSpendsCard').hidden = !hasPlan;
+
+  if (!hasPlan) {
+    return;
+  }
+
+  const weekLabel = plan.title || `Week of ${plan.week_start}`;
+  document.querySelector('#planWeekLabel').textContent = weekLabel;
+  document.querySelector('#stepsProgress').textContent =
+    `${plan.totals.steps_done} of ${plan.totals.steps_total} done`;
+
+  const stepsList = document.querySelector('#planStepsList');
+  if (!plan.steps.length) {
+    stepsList.innerHTML = '<li class="empty-state">No steps in this plan.</li>';
+  } else {
+    stepsList.innerHTML = plan.steps.map((step) => `
+      <li class="${step.done ? 'step-done' : ''}">
+        <label>
+          <input type="checkbox" data-step-id="${step.id}" ${step.done ? 'checked' : ''}>
+          <span>${escapeHtml(step.label)}</span>
+        </label>
+      </li>
+    `).join('');
+  }
+
+  const envelopesBody = document.querySelector('#envelopesTableBody');
+  if (!plan.envelopes.length) {
+    envelopesBody.innerHTML = '<tr><td colspan="6" class="empty-state">No envelopes in this plan.</td></tr>';
+  } else {
+    envelopesBody.innerHTML = plan.envelopes.map((envelope) => {
+      const status = envelopeStatusMeta(envelope);
+      const remainingClass = envelope.remaining_cents < 0 ? 'amount-negative' : '';
+      return `
+        <tr>
+          <td>${escapeHtml(envelope.name)}</td>
+          <td>${formatCurrency(envelope.allocated_cents)}</td>
+          <td>${formatCurrency(envelope.spent_cents)}</td>
+          <td class="${remainingClass}">${formatCurrency(envelope.remaining_cents)}</td>
+          <td><span class="status-pill ${status.className}">${status.label}</span></td>
+          <td><button type="button" class="ghost-button table-button" data-spend-envelope="${envelope.id}" data-envelope-name="${escapeHtml(envelope.name)}">Spend</button></td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  document.querySelector('#planTotals').textContent =
+    `Allocated ${formatCurrency(plan.totals.allocated_cents)}, spent ${formatCurrency(plan.totals.spent_cents)}, remaining ${formatCurrency(plan.totals.remaining_cents)}.`;
+
+  const spendRows = plan.envelopes.flatMap((envelope) =>
+    envelope.spends.map((spend) => ({ ...spend, envelope_name: envelope.name })));
+  spendRows.sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.id - b.id);
+
+  const spendsBody = document.querySelector('#spendsTableBody');
+  if (!spendRows.length) {
+    spendsBody.innerHTML = '<tr><td colspan="5" class="empty-state">Nothing spent yet this week.</td></tr>';
+  } else {
+    spendsBody.innerHTML = spendRows.map((spend) => `
+      <tr>
+        <td>${escapeHtml(spend.date || '')}</td>
+        <td>${escapeHtml(spend.envelope_name)}</td>
+        <td class="source-copy">${escapeHtml(spend.memo || '')}</td>
+        <td>${formatCurrency(spend.amount_cents)}</td>
+        <td><button type="button" class="ghost-button table-button" data-delete-spend="${spend.id}">Delete</button></td>
+      </tr>
+    `).join('');
+  }
+}
+
+function switchView(view) {
+  state.view = view;
+  document.querySelector('#view-dashboard').hidden = view !== 'dashboard';
+  document.querySelector('#view-plan').hidden = view !== 'plan';
+  document.querySelector('.month-control').hidden = view !== 'dashboard';
+
+  document.querySelectorAll('[data-view]').forEach((button) => {
+    const active = button.dataset.view === view;
+    button.classList.toggle('action-button', active);
+    button.classList.toggle('ghost-button', !active);
+  });
+
+  if (view === 'plan') {
+    loadPlanView().catch((error) => showToast(error.message));
+  }
+}
+
+function parsePlanForm(form) {
+  const raw = Object.fromEntries(new FormData(form).entries());
+  const steps = (raw.steps_lines || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((label) => ({ label }));
+
+  const envelopes = (raw.envelope_lines || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const splitAt = line.lastIndexOf(':');
+      const name = (splitAt >= 0 ? line.slice(0, splitAt) : line).trim();
+      const dollars = splitAt >= 0 ? Number(line.slice(splitAt + 1).trim()) : 0;
+      if (!name || Number.isNaN(dollars)) {
+        throw new Error(`Could not read envelope line: ${line}`);
+      }
+      return { name, allocated_cents: Math.round(dollars * 100) };
+    });
+
+  return {
+    week_start: raw.week_start,
+    title: raw.title || null,
+    steps,
+    envelopes
+  };
+}
+
+function wirePlanView() {
+  document.querySelectorAll('[data-view]').forEach((button) => {
+    button.addEventListener('click', () => switchView(button.dataset.view));
+  });
+
+  const planView = document.querySelector('#view-plan');
+
+  planView.addEventListener('change', async (event) => {
+    const checkbox = event.target.closest('input[data-step-id]');
+    if (!checkbox) {
+      return;
+    }
+    try {
+      await api(`/api/steps/${checkbox.dataset.stepId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ done: checkbox.checked ? 1 : 0 })
+      });
+      await loadPlanView();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+
+  planView.addEventListener('click', async (event) => {
+    const spendButton = event.target.closest('[data-spend-envelope]');
+    if (spendButton) {
+      const form = document.querySelector('#spendForm');
+      form.reset();
+      form.elements.envelope_id.value = spendButton.dataset.spendEnvelope;
+      form.elements.date.value = new Date().toISOString().slice(0, 10);
+      document.querySelector('#spendModalTitle').textContent = `Add Spend: ${spendButton.dataset.envelopeName}`;
+      document.querySelector('#spendModal').showModal();
+      return;
+    }
+
+    const deleteButton = event.target.closest('[data-delete-spend]');
+    if (deleteButton) {
+      try {
+        await api(`/api/spends/${deleteButton.dataset.deleteSpend}`, { method: 'DELETE' });
+        showToast('Spend deleted');
+        await loadPlanView();
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+  });
+
+  document.querySelector('#planForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    try {
+      const payload = parsePlanForm(form);
+      await api('/api/plans', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      form.closest('dialog').close();
+      showToast('Plan created');
+      await loadPlanView();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+
+  document.querySelector('#spendForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    try {
+      const payload = {
+        amount_cents: Math.round(Number(form.elements.amount_dollars.value) * 100),
+        memo: form.elements.memo.value || null,
+        date: form.elements.date.value || null
+      };
+      await api(`/api/envelopes/${form.elements.envelope_id.value}/spends`, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      form.reset();
+      form.closest('dialog').close();
+      showToast('Spend saved');
+      await loadPlanView();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+}
+
 function formToPayload(form) {
   const raw = Object.fromEntries(new FormData(form).entries());
   const payload = { ...raw };
@@ -213,7 +464,7 @@ function wireModals() {
     });
   });
 
-  document.querySelectorAll('.modal-form').forEach((form) => {
+  document.querySelectorAll('.modal-form[data-endpoint]').forEach((form) => {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
 
@@ -241,6 +492,7 @@ function defaultMonth() {
 async function init() {
   monthPicker.value = defaultMonth();
   wireModals();
+  wirePlanView();
 
   monthPicker.addEventListener('change', async (event) => {
     try {
