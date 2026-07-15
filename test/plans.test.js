@@ -35,12 +35,12 @@ const PLAN_PAYLOAD = {
   ]
 };
 
-test('GET /api/health reports version 0.2.0', async (t) => {
+test('GET /api/health reports version 0.2.1', async (t) => {
   const { app, dbPath } = buildApp('plans-health-version');
   t.after(() => cleanup(app, dbPath));
 
   const response = await request(app).get('/api/health').expect(200);
-  assert.equal(response.body.version, '0.2.0');
+  assert.equal(response.body.version, '0.2.1');
 });
 
 test('GET /api/plans/current returns 404 when no plan exists, list is empty', async (t) => {
