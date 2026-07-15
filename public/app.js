@@ -43,6 +43,16 @@ async function api(path, options = {}) {
   return data;
 }
 
+function isoDateLocal(date = new Date()) {
+  // Browser-local calendar day (NOT toISOString, which is UTC and rolls to
+  // tomorrow every evening for anyone west of Greenwich).
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')
+  ].join('-');
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
     '&': '&amp;',
@@ -91,10 +101,10 @@ function renderBillsTable() {
     const sourceName = bill.earmark?.source_name || 'No earmark';
     return `
       <tr>
-        <td>${bill.name}</td>
+        <td>${escapeHtml(bill.name)}</td>
         <td>${bill.due_date}</td>
         <td>${formatCurrency(bill.amount_cents)}</td>
-        <td class="source-copy">${sourceName}</td>
+        <td class="source-copy">${escapeHtml(sourceName)}</td>
         <td><span class="status-pill ${status.className}">${status.label}</span></td>
       </tr>
     `;
@@ -189,7 +199,9 @@ async function loadDashboard(month) {
 }
 
 async function fetchCurrentPlan() {
-  const response = await fetch('/api/plans/current');
+  // Pass the browser's local date explicitly so "current" matches the user's
+  // day even when the server host runs in a different time zone.
+  const response = await fetch(`/api/plans/current?date=${isoDateLocal()}`);
   if (response.status === 404) {
     return null;
   }
@@ -305,6 +317,8 @@ function switchView(view) {
 
   if (view === 'plan') {
     loadPlanView().catch((error) => showToast(error.message));
+  } else if (view === 'dashboard' && !state.cashflow) {
+    loadDashboard(monthPicker.value).catch((error) => showToast(error.message));
   }
 }
 
@@ -357,6 +371,8 @@ function wirePlanView() {
       });
       await loadPlanView();
     } catch (error) {
+      // Revert the optimistic flip so the checkbox matches the database.
+      checkbox.checked = !checkbox.checked;
       showToast(error.message);
     }
   });
@@ -367,7 +383,7 @@ function wirePlanView() {
       const form = document.querySelector('#spendForm');
       form.reset();
       form.elements.envelope_id.value = spendButton.dataset.spendEnvelope;
-      form.elements.date.value = new Date().toISOString().slice(0, 10);
+      form.elements.date.value = isoDateLocal();
       document.querySelector('#spendModalTitle').textContent = `Add Spend: ${spendButton.dataset.envelopeName}`;
       document.querySelector('#spendModal').showModal();
       return;
@@ -390,14 +406,19 @@ function wirePlanView() {
     const form = event.target;
     try {
       const payload = parsePlanForm(form);
-      await api('/api/plans', {
+      const created = await api('/api/plans', {
         method: 'POST',
         body: JSON.stringify(payload)
       });
       form.reset();
       form.closest('dialog').close();
-      showToast('Plan created');
       await loadPlanView();
+      // The view only ever shows the plan covering today, so make it clear
+      // when the new plan saved but is not the one on screen.
+      const isDisplayed = state.plan && state.plan.id === created.id;
+      showToast(isDisplayed
+        ? 'Plan created'
+        : `Plan saved for week of ${created.week_start} (not the current week)`);
     } catch (error) {
       showToast(error.message);
     }
@@ -486,7 +507,7 @@ function wireModals() {
 }
 
 function defaultMonth() {
-  return new Date().toISOString().slice(0, 7);
+  return isoDateLocal().slice(0, 7);
 }
 
 async function init() {
@@ -502,11 +523,19 @@ async function init() {
     }
   });
 
+  // Land on the Week Plan view when a plan covers today; Dashboard otherwise.
+  let landingView = 'dashboard';
   try {
-    await loadDashboard(monthPicker.value);
-  } catch (error) {
-    showToast(error.message);
+    const plan = await fetchCurrentPlan();
+    if (plan) {
+      state.plan = plan;
+      state.planLoaded = true;
+      landingView = 'plan';
+    }
+  } catch (_error) {
+    // Fall back to the dashboard if the check fails.
   }
+  switchView(landingView);
 }
 
 init();

@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS plan_envelopes (
 CREATE TABLE IF NOT EXISTS envelope_spends (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   envelope_id INTEGER NOT NULL REFERENCES plan_envelopes(id) ON DELETE CASCADE,
-  amount_cents INTEGER NOT NULL,
+  amount_cents INTEGER NOT NULL CHECK(amount_cents > 0),
   memo TEXT,
   date TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP

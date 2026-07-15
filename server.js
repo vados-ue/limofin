@@ -191,8 +191,19 @@ function buildCrudRouter(db, config) {
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+// Upper bound for money fields ($100M in cents). Keeps every stored amount a
+// safe integer so SQLite keeps the INTEGER affinity and rollups stay exact.
+const MAX_CENTS = 10000000000;
+
 function isoToday() {
-  return new Date().toISOString().slice(0, 10);
+  // Server-local calendar day (NOT toISOString, which is UTC and rolls to
+  // tomorrow every evening for anyone west of Greenwich).
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0')
+  ].join('-');
 }
 
 function normalizeDoneFlag(value) {
@@ -236,8 +247,8 @@ function validatePlanPayload(payload) {
       throw new Error('Each envelope needs a non-empty name');
     }
     const allocated = envelope.allocated_cents === undefined ? 0 : envelope.allocated_cents;
-    if (!Number.isInteger(allocated) || allocated < 0) {
-      throw new Error('allocated_cents must be a non-negative integer (cents)');
+    if (!Number.isSafeInteger(allocated) || allocated < 0 || allocated > MAX_CENTS) {
+      throw new Error('allocated_cents must be a non-negative integer (cents, at most 10000000000)');
     }
     return { name: envelope.name.trim(), allocated_cents: allocated };
   });
@@ -289,6 +300,17 @@ function getPlanDetail(db, planId) {
       steps_done: steps.filter((step) => step.done === 1).length
     }
   };
+}
+
+function friendlyPlanError(error) {
+  const message = String(error && error.message ? error.message : error);
+  if (message.includes('UNIQUE constraint failed: week_plans.week_start')) {
+    return 'A plan for that week already exists';
+  }
+  if (message.includes('UNIQUE constraint failed: plan_envelopes')) {
+    return 'Envelope names must be unique within a plan';
+  }
+  return message;
 }
 
 function createPlan(db, payload) {
@@ -511,7 +533,7 @@ function createApp(options = {}) {
       const planId = createPlan(db, payload);
       res.status(201).json(getPlanDetail(db, planId));
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      res.status(400).json({ error: friendlyPlanError(error) });
     }
   });
 
@@ -552,8 +574,8 @@ function createApp(options = {}) {
     }
     try {
       const body = req.body || {};
-      if (!Number.isInteger(body.amount_cents) || body.amount_cents <= 0) {
-        throw new Error('amount_cents must be a positive integer (cents)');
+      if (!Number.isSafeInteger(body.amount_cents) || body.amount_cents <= 0 || body.amount_cents > MAX_CENTS) {
+        throw new Error('amount_cents must be a positive integer (cents, at most 10000000000)');
       }
       const date = body.date === undefined || body.date === null || body.date === '' ? isoToday() : body.date;
       if (!DATE_PATTERN.test(date)) {

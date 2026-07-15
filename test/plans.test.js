@@ -81,9 +81,26 @@ test('POST /api/plans round-trips plan, steps, and envelopes', async (t) => {
   await request(app).get('/api/plans/current?date=2026-07-22').expect(404);
   await request(app).get('/api/plans/current?date=2026-07-14').expect(404);
 
-  // Duplicate week_start is rejected via the UNIQUE constraint.
+  // Duplicate week_start is rejected with a friendly message, not raw SQLite.
   const duplicate = await request(app).post('/api/plans').send({ week_start: '2026-07-15' }).expect(400);
-  assert.match(duplicate.body.error, /UNIQUE/);
+  assert.equal(duplicate.body.error, 'A plan for that week already exists');
+
+  // Duplicate envelope names within one plan get a friendly message too.
+  const dupEnvelope = await request(app).post('/api/plans').send({
+    week_start: '2026-09-02',
+    envelopes: [{ name: 'Gas', allocated_cents: 6000 }, { name: 'Gas', allocated_cents: 1000 }]
+  }).expect(400);
+  assert.equal(dupEnvelope.body.error, 'Envelope names must be unique within a plan');
+
+  // allocated_cents must be a safe integer within the cap.
+  await request(app).post('/api/plans').send({
+    week_start: '2026-09-09',
+    envelopes: [{ name: 'X', allocated_cents: 1e308 }]
+  }).expect(400);
+  await request(app).post('/api/plans').send({
+    week_start: '2026-09-09',
+    envelopes: [{ name: 'X', allocated_cents: 9007199254740993 }]
+  }).expect(400);
 });
 
 test('PATCH /api/steps/:id sets and toggles done', async (t) => {
@@ -141,9 +158,12 @@ test('POST envelope spends roll up spent and remaining cents', async (t) => {
   assert.equal(detail.body.totals.spent_cents, 9233);
   assert.equal(detail.body.totals.remaining_cents, 28000 - 9233);
 
-  // Validation: non-positive and non-integer amounts are rejected.
+  // Validation: non-positive, non-integer, and unsafe/oversized amounts are rejected.
   await request(app).post(`/api/envelopes/${envelopeId}/spends`).send({ amount_cents: 0 }).expect(400);
   await request(app).post(`/api/envelopes/${envelopeId}/spends`).send({ amount_cents: 12.5 }).expect(400);
+  await request(app).post(`/api/envelopes/${envelopeId}/spends`).send({ amount_cents: 1e300 }).expect(400);
+  await request(app).post(`/api/envelopes/${envelopeId}/spends`).send({ amount_cents: 9007199254740993 }).expect(400);
+  await request(app).post(`/api/envelopes/${envelopeId}/spends`).send({ amount_cents: 10000000001 }).expect(400);
   await request(app).post('/api/envelopes/9999/spends').send({ amount_cents: 100 }).expect(404);
 });
 
@@ -216,4 +236,17 @@ test('plan seed file is idempotent across repeated applies', async (t) => {
   const again = await request(app).get(`/api/plans/${plans.body[0].id}`).expect(200);
   assert.equal(again.body.steps.length, stepCount);
   assert.equal(again.body.envelopes.length, envelopeCount);
+
+  // Rows the user deletes must NOT be resurrected by a later re-apply.
+  const spendsBefore = db.prepare('SELECT COUNT(*) AS count FROM envelope_spends').get().count;
+  assert.ok(spendsBefore > 0);
+  db.prepare("DELETE FROM envelope_spends WHERE memo = 'Publix run'").run();
+  db.exec(seedSql);
+  const spendsAfter = db.prepare('SELECT COUNT(*) AS count FROM envelope_spends').get().count;
+  assert.equal(spendsAfter, spendsBefore - 1);
+
+  db.prepare("DELETE FROM plan_steps WHERE label = 'Review subscriptions for cuts'").run();
+  db.exec(seedSql);
+  const stepsAfter = await request(app).get(`/api/plans/${plans.body[0].id}`).expect(200);
+  assert.equal(stepsAfter.body.steps.length, stepCount - 1);
 });

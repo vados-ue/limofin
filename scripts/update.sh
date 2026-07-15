@@ -116,6 +116,23 @@ else
 fi
 echo ""
 
+# Apply plan seeds (apply-once guarded, safe to re-run).
+# Runs after the service is up so migrations have created the tables.
+echo "▸ Applying plan seeds"
+if [[ -f "$DB_FILE" ]]; then
+  SEED_COUNT=0
+  for seed in "$INSTALL_DIR"/seeds/plan_*.sql; do
+    [[ -e "$seed" ]] || continue
+    sqlite3 "$DB_FILE" ".timeout 5000" ".read $seed" || fail "Seed apply failed: $(basename "$seed")"
+    ok "Applied $(basename "$seed")"
+    SEED_COUNT=$((SEED_COUNT + 1))
+  done
+  [[ $SEED_COUNT -gt 0 ]] || warn "No plan seeds found"
+else
+  warn "DB missing after start — skipped plan seeds"
+fi
+echo ""
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Update complete — LimoFin v$(node -p "require('./package.json').version")"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
