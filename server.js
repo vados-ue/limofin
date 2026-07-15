@@ -189,6 +189,139 @@ function buildCrudRouter(db, config) {
   return router;
 }
 
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function isoToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function normalizeDoneFlag(value) {
+  if (value === true || value === 1 || value === '1') {
+    return 1;
+  }
+  if (value === false || value === 0 || value === '0') {
+    return 0;
+  }
+  throw new Error('done must be a boolean or 0/1');
+}
+
+function validatePlanPayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Plan payload must be an object');
+  }
+  if (typeof payload.week_start !== 'string' || !DATE_PATTERN.test(payload.week_start)) {
+    throw new Error('week_start must be YYYY-MM-DD');
+  }
+
+  const steps = payload.steps === undefined ? [] : payload.steps;
+  if (!Array.isArray(steps)) {
+    throw new Error('steps must be an array');
+  }
+  const normalizedSteps = steps.map((step) => {
+    if (!step || typeof step.label !== 'string' || !step.label.trim()) {
+      throw new Error('Each step needs a non-empty label');
+    }
+    return {
+      label: step.label.trim(),
+      done: step.done === undefined ? 0 : normalizeDoneFlag(step.done)
+    };
+  });
+
+  const envelopes = payload.envelopes === undefined ? [] : payload.envelopes;
+  if (!Array.isArray(envelopes)) {
+    throw new Error('envelopes must be an array');
+  }
+  const normalizedEnvelopes = envelopes.map((envelope) => {
+    if (!envelope || typeof envelope.name !== 'string' || !envelope.name.trim()) {
+      throw new Error('Each envelope needs a non-empty name');
+    }
+    const allocated = envelope.allocated_cents === undefined ? 0 : envelope.allocated_cents;
+    if (!Number.isInteger(allocated) || allocated < 0) {
+      throw new Error('allocated_cents must be a non-negative integer (cents)');
+    }
+    return { name: envelope.name.trim(), allocated_cents: allocated };
+  });
+
+  return {
+    week_start: payload.week_start,
+    title: coerceValue(payload.title === undefined ? null : payload.title),
+    notes: coerceValue(payload.notes === undefined ? null : payload.notes),
+    steps: normalizedSteps,
+    envelopes: normalizedEnvelopes
+  };
+}
+
+function envelopeWithRollup(db, envelopeId) {
+  const envelope = db.prepare('SELECT * FROM plan_envelopes WHERE id = ?').get(envelopeId);
+  if (!envelope) {
+    return null;
+  }
+  const spends = db.prepare('SELECT * FROM envelope_spends WHERE envelope_id = ? ORDER BY date, id').all(envelopeId);
+  const spentCents = spends.reduce((sum, spend) => sum + spend.amount_cents, 0);
+  return {
+    ...envelope,
+    spent_cents: spentCents,
+    remaining_cents: envelope.allocated_cents - spentCents,
+    spends
+  };
+}
+
+function getPlanDetail(db, planId) {
+  const plan = db.prepare('SELECT * FROM week_plans WHERE id = ?').get(planId);
+  if (!plan) {
+    return null;
+  }
+  const steps = db.prepare('SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY position, id').all(plan.id);
+  const envelopeRows = db.prepare('SELECT id FROM plan_envelopes WHERE plan_id = ? ORDER BY position, id').all(plan.id);
+  const envelopes = envelopeRows.map((row) => envelopeWithRollup(db, row.id));
+  const allocated = envelopes.reduce((sum, envelope) => sum + envelope.allocated_cents, 0);
+  const spent = envelopes.reduce((sum, envelope) => sum + envelope.spent_cents, 0);
+
+  return {
+    ...plan,
+    steps,
+    envelopes,
+    totals: {
+      allocated_cents: allocated,
+      spent_cents: spent,
+      remaining_cents: allocated - spent,
+      steps_total: steps.length,
+      steps_done: steps.filter((step) => step.done === 1).length
+    }
+  };
+}
+
+function createPlan(db, payload) {
+  const insertAll = db.transaction((data) => {
+    const info = db.prepare(
+      'INSERT INTO week_plans (week_start, title, notes) VALUES (@week_start, @title, @notes)'
+    ).run({ week_start: data.week_start, title: data.title, notes: data.notes });
+    const planId = info.lastInsertRowid;
+
+    const stepStmt = db.prepare(
+      'INSERT INTO plan_steps (plan_id, label, done, position) VALUES (?, ?, ?, ?)'
+    );
+    data.steps.forEach((step, index) => stepStmt.run(planId, step.label, step.done, index));
+
+    const envelopeStmt = db.prepare(
+      'INSERT INTO plan_envelopes (plan_id, name, allocated_cents, position) VALUES (?, ?, ?, ?)'
+    );
+    data.envelopes.forEach((envelope, index) => envelopeStmt.run(planId, envelope.name, envelope.allocated_cents, index));
+
+    return planId;
+  });
+  return insertAll(payload);
+}
+
+function findPlanForDate(db, date) {
+  return db.prepare(`
+    SELECT id FROM week_plans
+    WHERE week_start <= ? AND date(week_start, '+6 days') >= ?
+    ORDER BY week_start DESC
+    LIMIT 1
+  `).get(date, date);
+}
+
 function monthBounds(month) {
   return {
     month,
@@ -346,6 +479,114 @@ function createApp(options = {}) {
     }
   });
 
+  app.get('/api/plans', (_req, res) => {
+    const rows = db.prepare('SELECT * FROM week_plans ORDER BY week_start DESC, id DESC').all();
+    res.json(rows);
+  });
+
+  // Registered before /api/plans/:id so "current" is not captured as an id.
+  app.get('/api/plans/current', (req, res) => {
+    const date = req.query.date || isoToday();
+    if (!DATE_PATTERN.test(date)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+    const match = findPlanForDate(db, date);
+    if (!match) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    return res.json(getPlanDetail(db, match.id));
+  });
+
+  app.get('/api/plans/:id', (req, res) => {
+    const plan = getPlanDetail(db, req.params.id);
+    if (!plan) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    return res.json(plan);
+  });
+
+  app.post('/api/plans', (req, res) => {
+    try {
+      const payload = validatePlanPayload(req.body);
+      const planId = createPlan(db, payload);
+      res.status(201).json(getPlanDetail(db, planId));
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/plans/:id', (req, res) => {
+    const info = db.prepare('DELETE FROM week_plans WHERE id = ?').run(req.params.id);
+    if (info.changes === 0) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    return res.json({ ok: true });
+  });
+
+  app.patch('/api/steps/:id', (req, res) => {
+    try {
+      const body = req.body || {};
+      let updated;
+      if (body.done === undefined) {
+        // No explicit value: toggle in place.
+        updated = db.prepare(
+          'UPDATE plan_steps SET done = CASE done WHEN 1 THEN 0 ELSE 1 END WHERE id = ?'
+        ).run(req.params.id);
+      } else {
+        updated = db.prepare('UPDATE plan_steps SET done = ? WHERE id = ?')
+          .run(normalizeDoneFlag(body.done), req.params.id);
+      }
+      if (updated.changes === 0) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      return res.json(db.prepare('SELECT * FROM plan_steps WHERE id = ?').get(req.params.id));
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/envelopes/:id/spends', (req, res) => {
+    const envelope = db.prepare('SELECT * FROM plan_envelopes WHERE id = ?').get(req.params.id);
+    if (!envelope) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    try {
+      const body = req.body || {};
+      if (!Number.isInteger(body.amount_cents) || body.amount_cents <= 0) {
+        throw new Error('amount_cents must be a positive integer (cents)');
+      }
+      const date = body.date === undefined || body.date === null || body.date === '' ? isoToday() : body.date;
+      if (!DATE_PATTERN.test(date)) {
+        throw new Error('date must be YYYY-MM-DD');
+      }
+      const info = db.prepare(
+        'INSERT INTO envelope_spends (envelope_id, amount_cents, memo, date) VALUES (?, ?, ?, ?)'
+      ).run(envelope.id, body.amount_cents, coerceValue(body.memo === undefined ? null : body.memo), date);
+      const spend = db.prepare('SELECT * FROM envelope_spends WHERE id = ?').get(info.lastInsertRowid);
+      const rollup = envelopeWithRollup(db, envelope.id);
+      return res.status(201).json({
+        ...spend,
+        envelope: {
+          id: rollup.id,
+          name: rollup.name,
+          allocated_cents: rollup.allocated_cents,
+          spent_cents: rollup.spent_cents,
+          remaining_cents: rollup.remaining_cents
+        }
+      });
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/spends/:id', (req, res) => {
+    const info = db.prepare('DELETE FROM envelope_spends WHERE id = ?').run(req.params.id);
+    if (info.changes === 0) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    return res.json({ ok: true });
+  });
+
   app.get('*', (_req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
   });
@@ -409,6 +650,7 @@ module.exports = {
   buildCashflow,
   closeResources,
   createApp,
+  getPlanDetail,
   openDatabase,
   runMigrations,
   startServer
