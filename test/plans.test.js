@@ -253,3 +253,168 @@ test('plan seed file is idempotent across repeated applies', async (t) => {
   const stepsAfter = await request(app).get(`/api/plans/${plans.body[0].id}`).expect(200);
   assert.equal(stepsAfter.body.steps.length, stepCount - 1);
 });
+
+const DETAIL_PAYLOAD = {
+  week_start: '2026-08-05',
+  title: 'Detail week',
+  verdict: 'Tight but doable; the floor holds if nothing new hits.',
+  floor_cents: 150000,
+  runway: [
+    { label: 'Now', amount_cents: 302500 },
+    { label: 'Fri', amount_cents: 241200 },
+    { label: 'Sun', amount_cents: 159500 }
+  ],
+  flags: [
+    { severity: 'danger', text: 'Dining ceiling effectively spent.' },
+    { severity: 'warn', text: 'Upstart balance needs a portal check.' },
+    { severity: 'info', text: 'Runway assumes only the $200 pull.' }
+  ]
+};
+
+test('POST /api/plans round-trips verdict, floor, runway, and flags', async (t) => {
+  const { app, dbPath } = buildApp('plans-detail-roundtrip');
+  t.after(() => cleanup(app, dbPath));
+
+  const created = await request(app).post('/api/plans').send(DETAIL_PAYLOAD).expect(201);
+  assert.equal(created.body.verdict, DETAIL_PAYLOAD.verdict);
+  assert.equal(created.body.floor_cents, 150000);
+  assert.deepEqual(created.body.runway, DETAIL_PAYLOAD.runway);
+  assert.deepEqual(created.body.flags, DETAIL_PAYLOAD.flags);
+
+  const fetched = await request(app).get(`/api/plans/${created.body.id}`).expect(200);
+  assert.equal(fetched.body.verdict, DETAIL_PAYLOAD.verdict);
+  assert.equal(fetched.body.floor_cents, 150000);
+  assert.deepEqual(fetched.body.runway, DETAIL_PAYLOAD.runway);
+  assert.deepEqual(fetched.body.flags, DETAIL_PAYLOAD.flags);
+
+  // The current endpoint carries the same detail fields.
+  const current = await request(app).get('/api/plans/current?date=2026-08-07').expect(200);
+  assert.equal(current.body.verdict, DETAIL_PAYLOAD.verdict);
+  assert.deepEqual(current.body.runway, DETAIL_PAYLOAD.runway);
+});
+
+test('plan detail validation rejects bad severity and unsafe cents', async (t) => {
+  const { app, dbPath } = buildApp('plans-detail-validation');
+  t.after(() => cleanup(app, dbPath));
+
+  // Severity outside the whitelist.
+  const badSeverity = await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    flags: [{ severity: 'fatal', text: 'nope' }]
+  }).expect(400);
+  assert.match(badSeverity.body.error, /severity must be one of/);
+
+  // Flag text is required.
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    flags: [{ severity: 'info', text: '' }]
+  }).expect(400);
+
+  // floor_cents: unsafe integer, negative, and oversized.
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    floor_cents: 9007199254740993
+  }).expect(400);
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    floor_cents: -1
+  }).expect(400);
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    floor_cents: 10000000001
+  }).expect(400);
+
+  // Runway points: unsafe amount, non-integer amount, missing label.
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    runway: [{ label: 'Now', amount_cents: 1e308 }]
+  }).expect(400);
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    runway: [{ label: 'Now', amount_cents: 12.5 }]
+  }).expect(400);
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    runway: [{ label: '', amount_cents: 100 }]
+  }).expect(400);
+
+  // Arrays are required to be arrays.
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    runway: 'not an array'
+  }).expect(400);
+  await request(app).post('/api/plans').send({
+    week_start: '2026-08-12',
+    flags: 'not an array'
+  }).expect(400);
+
+  // Nothing invalid got through.
+  const list = await request(app).get('/api/plans').expect(200);
+  assert.deepEqual(list.body, []);
+});
+
+test('plans created without details return null verdict and empty arrays', async (t) => {
+  const { app, dbPath } = buildApp('plans-detail-absent');
+  t.after(() => cleanup(app, dbPath));
+
+  const created = await request(app).post('/api/plans').send(PLAN_PAYLOAD).expect(201);
+  const fetched = await request(app).get(`/api/plans/${created.body.id}`).expect(200);
+  assert.equal(fetched.body.verdict, null);
+  assert.equal(fetched.body.floor_cents, null);
+  assert.deepEqual(fetched.body.runway, []);
+  assert.deepEqual(fetched.body.flags, []);
+});
+
+test('seed populates the Payday week plan exactly', async (t) => {
+  const { app, dbPath } = buildApp('plans-seed-fidelity');
+  t.after(() => cleanup(app, dbPath));
+
+  const seedSql = fs.readFileSync(SEED_PATH, 'utf8');
+  app.locals.db.exec(seedSql);
+
+  const plans = await request(app).get('/api/plans').expect(200);
+  assert.equal(plans.body.length, 1);
+
+  const detail = await request(app).get(`/api/plans/${plans.body[0].id}`).expect(200);
+  const plan = detail.body;
+  assert.equal(plan.week_start, '2026-07-15');
+  assert.equal(plan.title, 'Payday week');
+  assert.match(plan.verdict, /^Chase bottomed at \$90\.93/);
+  assert.match(plan.verdict, /one Zelle wide\.$/);
+  assert.equal(plan.floor_cents, 150000);
+
+  assert.equal(plan.steps.length, 5);
+  assert.match(plan.steps[0].label, /^Wed 15:/);
+  assert.match(plan.steps[4].label, /^Sun 19:/);
+
+  assert.equal(plan.envelopes.length, 4);
+  assert.deepEqual(
+    plan.envelopes.map((envelope) => [envelope.name, envelope.allocated_cents]),
+    [
+      ['Concert (Tampa, all-in)', 12000],
+      ['Groceries (Publix, Sat)', 7500],
+      ['Gas (debit)', 4000],
+      ['Dining out, dispensary, betting, Zelle', 0]
+    ]
+  );
+
+  // Zero spends: the owner logs them live.
+  assert.equal(plan.totals.spent_cents, 0);
+  assert.equal(plan.envelopes.every((envelope) => envelope.spends.length === 0), true);
+
+  assert.deepEqual(plan.runway, [
+    { label: 'Now', amount_cents: 302500 },
+    { label: 'Wed 15', amount_cents: 279800 },
+    { label: 'Thu 16', amount_cents: 253100 },
+    { label: 'Fri 17', amount_cents: 241200 },
+    { label: 'Sat 18', amount_cents: 209700 },
+    { label: 'Sun 19', amount_cents: 159500 }
+  ]);
+
+  assert.equal(plan.flags.length, 5);
+  assert.deepEqual(
+    plan.flags.map((flag) => flag.severity),
+    ['danger', 'danger', 'warn', 'warn', 'info']
+  );
+  assert.match(plan.flags[4].text, /^Mom's Zelle/);
+});
