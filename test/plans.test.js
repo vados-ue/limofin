@@ -237,15 +237,18 @@ test('plan seed file is idempotent across repeated applies', async (t) => {
   assert.equal(again.body.steps.length, stepCount);
   assert.equal(again.body.envelopes.length, envelopeCount);
 
-  // Rows the user deletes must NOT be resurrected by a later re-apply.
-  const spendsBefore = db.prepare('SELECT COUNT(*) AS count FROM envelope_spends').get().count;
-  assert.ok(spendsBefore > 0);
-  db.prepare("DELETE FROM envelope_spends WHERE memo = 'Publix run'").run();
-  db.exec(seedSql);
-  const spendsAfter = db.prepare('SELECT COUNT(*) AS count FROM envelope_spends').get().count;
-  assert.equal(spendsAfter, spendsBefore - 1);
+  // The seed ships zero spends, and re-applies must not invent any.
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM envelope_spends').get().count, 0);
 
-  db.prepare("DELETE FROM plan_steps WHERE label = 'Review subscriptions for cuts'").run();
+  // Rows the user deletes must NOT be resurrected by a later re-apply.
+  const flagsBefore = db.prepare('SELECT COUNT(*) AS count FROM plan_flags').get().count;
+  assert.ok(flagsBefore > 0);
+  db.prepare("DELETE FROM plan_flags WHERE severity = 'info'").run();
+  db.exec(seedSql);
+  const flagsAfter = db.prepare('SELECT COUNT(*) AS count FROM plan_flags').get().count;
+  assert.equal(flagsAfter, flagsBefore - 1);
+
+  db.prepare("DELETE FROM plan_steps WHERE label LIKE 'Thu 16:%'").run();
   db.exec(seedSql);
   const stepsAfter = await request(app).get(`/api/plans/${plans.body[0].id}`).expect(200);
   assert.equal(stepsAfter.body.steps.length, stepCount - 1);
