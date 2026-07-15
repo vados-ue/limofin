@@ -7,7 +7,8 @@ const state = {
   planLoaded: false,
   charts: {
     bills: null,
-    delta: null
+    delta: null,
+    runway: null
   }
 };
 
@@ -218,6 +219,107 @@ async function loadPlanView() {
   renderPlanView();
 }
 
+function floorLineLabel(cents) {
+  // Derived from the stored value, for example 150000 renders as "$1,500 floor".
+  const wholeDollars = cents % 100 === 0;
+  const formatted = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: wholeDollars ? 0 : 2,
+    maximumFractionDigits: 2
+  }).format(cents / 100);
+  return `${formatted} floor`;
+}
+
+function flagStatusClass(severity) {
+  if (severity === 'danger') {
+    return 'status-red';
+  }
+  if (severity === 'warn') {
+    return 'status-yellow';
+  }
+  return 'status-neutral';
+}
+
+function renderRunwayChart(plan) {
+  const wrap = document.querySelector('#planRunwayWrap');
+  const runway = plan.runway || [];
+
+  if (state.charts.runway) {
+    state.charts.runway.destroy();
+    state.charts.runway = null;
+  }
+
+  // Plans saved before runway data existed simply skip the chart.
+  if (!runway.length) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+
+  const datasets = [{
+    label: 'Runway',
+    data: runway.map((point) => point.amount_cents / 100),
+    borderColor: '#22c55e',
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
+    tension: 0.28,
+    fill: true
+  }];
+
+  if (plan.floor_cents !== null && plan.floor_cents !== undefined) {
+    datasets.push({
+      label: floorLineLabel(plan.floor_cents),
+      data: runway.map(() => plan.floor_cents / 100),
+      borderColor: '#ef4444',
+      borderDash: [6, 6],
+      pointRadius: 0,
+      fill: false
+    });
+  }
+
+  state.charts.runway = new Chart(document.querySelector('#runwayChart'), {
+    type: 'line',
+    data: {
+      labels: runway.map((point) => point.label),
+      datasets
+    },
+    options: {
+      scales: {
+        x: {
+          ticks: { color: '#9ca3af' },
+          grid: { color: 'rgba(255,255,255,0.06)' }
+        },
+        y: {
+          ticks: { color: '#9ca3af' },
+          grid: { color: 'rgba(255,255,255,0.06)' }
+        }
+      },
+      plugins: {
+        legend: { labels: { color: '#f3f4f6' } }
+      }
+    }
+  });
+}
+
+function renderPlanFlags(plan) {
+  const list = document.querySelector('#planFlagsList');
+  const flags = plan.flags || [];
+
+  // Plans saved before flags existed simply skip the list.
+  if (!flags.length) {
+    list.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+  list.hidden = false;
+  list.innerHTML = flags.map((flag) => `
+    <li class="flag-item">
+      <span class="status-pill ${flagStatusClass(flag.severity)}">${escapeHtml(flag.severity)}</span>
+      <span class="flag-text">${escapeHtml(flag.text)}</span>
+    </li>
+  `).join('');
+}
+
 function envelopeStatusMeta(envelope) {
   if (envelope.remaining_cents < 0) {
     return { label: 'Over', className: 'status-red' };
@@ -245,6 +347,14 @@ function renderPlanView() {
   document.querySelector('#planWeekLabel').textContent = weekLabel;
   document.querySelector('#stepsProgress').textContent =
     `${plan.totals.steps_done} of ${plan.totals.steps_total} done`;
+
+  // Plans saved before verdicts existed simply skip the paragraph.
+  const verdictEl = document.querySelector('#planVerdict');
+  verdictEl.hidden = !plan.verdict;
+  verdictEl.textContent = plan.verdict || '';
+
+  renderRunwayChart(plan);
+  renderPlanFlags(plan);
 
   const stepsList = document.querySelector('#planStepsList');
   if (!plan.steps.length) {

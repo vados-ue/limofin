@@ -361,6 +361,57 @@ tbody tr:last-child td {
   margin-top: 14px;
 }
 
+.plan-verdict {
+  color: var(--muted);
+  line-height: 1.55;
+  margin-bottom: 18px;
+}
+
+.runway-wrap {
+  margin-bottom: 18px;
+}
+
+.runway-wrap canvas {
+  width: 100%;
+}
+
+.flags-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+}
+
+.flag-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.flag-item .status-pill {
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+
+.flag-text {
+  line-height: 1.5;
+}
+
+.status-neutral {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+.plan-verdict[hidden],
+.runway-wrap[hidden],
+.flags-list[hidden] {
+  display: none;
+}
+
 .plan-empty-actions {
   margin-top: 16px;
 }
