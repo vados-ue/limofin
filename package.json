@@ -1,6 +1,6 @@
 {
   "name": "limofin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Personal bill and cash flow planner with bill-to-income earmarks.",
   "main": "server.js",
   "engines": {

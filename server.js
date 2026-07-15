@@ -8,7 +8,7 @@ const cron = require('node-cron');
 
 dotenv.config({ path: path.join(__dirname, 'data', '.env') });
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const DEFAULT_PORT = Number(process.env.PORT || 3002);
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const SEED_PATH = path.join(__dirname, 'seeds', 'seed.sql');
