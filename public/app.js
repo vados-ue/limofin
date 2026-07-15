@@ -245,6 +245,14 @@ function renderRunwayChart(plan) {
   const wrap = document.querySelector('#planRunwayWrap');
   const runway = plan.runway || [];
 
+  // Chart.js loads from a CDN. If it failed to load (host offline, CDN
+  // blocked), skip the chart instead of throwing so the rest of the plan
+  // view (steps, envelopes, spends) still renders and stays usable.
+  if (typeof Chart === 'undefined') {
+    wrap.hidden = true;
+    return;
+  }
+
   if (state.charts.runway) {
     state.charts.runway.destroy();
     state.charts.runway = null;
@@ -353,7 +361,6 @@ function renderPlanView() {
   verdictEl.hidden = !plan.verdict;
   verdictEl.textContent = plan.verdict || '';
 
-  renderRunwayChart(plan);
   renderPlanFlags(plan);
 
   const stepsList = document.querySelector('#planStepsList');
@@ -411,6 +418,10 @@ function renderPlanView() {
       </tr>
     `).join('');
   }
+
+  // Rendered last (and internally guarded) so a chart failure can never
+  // block the checklist, envelopes, or spend log above.
+  renderRunwayChart(plan);
 }
 
 function switchView(view) {

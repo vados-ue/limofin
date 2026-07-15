@@ -1,12 +1,20 @@
 -- LimoFin week plan seed: week starting 2026-07-15 (Payday week)
 -- Apply manually against an existing database, for example:
 --   sqlite3 data/limofin.db < seeds/plan_2026-07-15.sql
--- (scripts/update.sh also applies this automatically after each deploy.)
+-- (scripts/update.sh also applies this automatically after each deploy,
+-- and skips it once the week has ended.)
 -- Apply-once: whether a plan with week_start '2026-07-15' already exists is
 -- snapshotted into a temp table BEFORE any insert, and every statement is
 -- guarded on that snapshot. On a fresh database everything inserts; on any
 -- later run nothing inserts, so rows the user has edited or deleted through
 -- the UI are never resurrected.
+-- ORDERING: the guard keys on week_start alone, so ANY pre-existing plan for
+-- 2026-07-15 (for example an earlier placeholder) makes this entire file a
+-- silent no-op. To replace such a plan, delete it FIRST via
+-- DELETE /api/plans/:id (the API cascades to steps, envelopes, spends, meta,
+-- runway points, and flags; the bare sqlite3 CLI does NOT cascade unless you
+-- run PRAGMA foreign_keys=ON), and only then apply this seed. update.sh
+-- detects the collision and prints "Skipped", never a false "Applied".
 -- Amounts are integer cents. No spends are seeded: the owner logs them live.
 
 BEGIN;

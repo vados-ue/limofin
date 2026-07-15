@@ -118,16 +118,55 @@ echo ""
 
 # Apply plan seeds (apply-once guarded, safe to re-run).
 # Runs after the service is up so migrations have created the tables.
+#
+# Seeds are named plan_YYYY-MM-DD.sql (the plan's week_start) and their
+# apply-once guard keys on week_start alone, so ANY pre-existing plan for
+# that week (even a placeholder with a different title) makes the whole
+# file a silent no-op. We detect that case and report "Skipped", never
+# "Applied", so a no-op cannot masquerade as a successful seed. Seeds whose
+# week has already ended are skipped entirely, so deleting an old plan in
+# the UI does not resurrect it on the next deploy.
+#
+# NOTE for operators: never delete week_plans rows with the bare sqlite3
+# CLI — it defaults PRAGMA foreign_keys OFF and orphans rows in
+# plan_steps/plan_envelopes/envelope_spends/plan_meta/plan_runway_points/
+# plan_flags. Use DELETE /api/plans/:id (cascades correctly), or prefix
+# any CLI delete with "PRAGMA foreign_keys=ON;".
 echo "▸ Applying plan seeds"
 if [[ -f "$DB_FILE" ]]; then
   SEED_COUNT=0
+  TODAY=$(date +%F)
   for seed in "$INSTALL_DIR"/seeds/plan_*.sql; do
     [[ -e "$seed" ]] || continue
-    sqlite3 "$DB_FILE" ".timeout 5000" ".read $seed" || fail "Seed apply failed: $(basename "$seed")"
-    ok "Applied $(basename "$seed")"
-    SEED_COUNT=$((SEED_COUNT + 1))
+    SEED_NAME=$(basename "$seed")
+    WEEK_START="${SEED_NAME#plan_}"
+    WEEK_START="${WEEK_START%.sql}"
+    if [[ ! "$WEEK_START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      warn "Skipped $SEED_NAME — name is not plan_YYYY-MM-DD.sql, cannot verify; apply manually if intended"
+      continue
+    fi
+    WEEK_END=$(date -d "$WEEK_START +6 days" +%F)
+    if [[ "$WEEK_END" < "$TODAY" ]]; then
+      warn "Skipped $SEED_NAME — week ended $WEEK_END (expired seeds never re-apply)"
+      continue
+    fi
+    EXISTING_TITLE=$(sqlite3 "$DB_FILE" ".timeout 5000" \
+      "SELECT title FROM week_plans WHERE week_start = '$WEEK_START' LIMIT 1")
+    if [[ -n "$EXISTING_TITLE" ]]; then
+      warn "Skipped $SEED_NAME — a plan for $WEEK_START already exists ('$EXISTING_TITLE') and the apply-once guard will not overwrite it. To land this seed: DELETE /api/plans/:id on that plan, then: sqlite3 $DB_FILE < $seed"
+      continue
+    fi
+    sqlite3 "$DB_FILE" ".timeout 5000" ".read $seed" || fail "Seed apply failed: $SEED_NAME"
+    LANDED=$(sqlite3 "$DB_FILE" ".timeout 5000" \
+      "SELECT COUNT(*) FROM week_plans WHERE week_start = '$WEEK_START'")
+    if [[ "$LANDED" -gt 0 ]]; then
+      ok "Applied $SEED_NAME"
+      SEED_COUNT=$((SEED_COUNT + 1))
+    else
+      fail "Seed ran but no plan landed for week $WEEK_START: $SEED_NAME"
+    fi
   done
-  [[ $SEED_COUNT -gt 0 ]] || warn "No plan seeds found"
+  [[ $SEED_COUNT -gt 0 ]] || warn "No plan seeds applied this run"
 else
   warn "DB missing after start — skipped plan seeds"
 fi
