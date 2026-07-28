@@ -19,6 +19,7 @@ No Plaid, no Monarch, no bank OAuth. Manual-entry first, zero external dependenc
 - Category-based bill breakdown (doughnut chart) and 6-month cash flow trend (line chart)
 - Quick-action modals for adding bills, sources, and expenses
 - Dark, single-page UI — no build step, no framework lock-in
+- **Companion PWA (v0.3)** at `/m` — install-to-home-screen mobile app: daily safe-to-spend glance, AI receipt scanning with offline queue, and spending trends
 - Deploy pattern mirrors Bulma Dashboard — `scripts/update.sh` handles backup, git pull, npm ci, migrate, restart, health-check
 
 ---
@@ -79,6 +80,13 @@ sudo bash /opt/limofin/scripts/update.sh
 | `GET`  | `/api/earmarks/:month` | Earmarks for month |
 | `POST` | `/api/earmarks` | Create earmark |
 | **`GET`** | **`/api/cashflow/:month`** | **The killer endpoint — forecast with traffic-light status per bill, total coverage %** |
+| `GET`  | `/api/today` | Companion glance: safe-to-spend today, envelope pace, upcoming bills, floor/runway |
+| `GET`  | `/api/insights` | Companion trends: 28-day daily burn, weekly adherence, memo/weekday patterns, month ledger |
+| `POST` | `/api/receipts` | Upload a receipt photo (base64 JSON); AI-parses when `ANTHROPIC_API_KEY` is set |
+| `GET`  | `/api/receipts` | List receipts by status (`pending`/`committed`/`dismissed`/`all`) |
+| `GET`  | `/api/receipts/:id/image` | Stored receipt photo |
+| `POST` | `/api/receipts/:id/commit` | Confirm a receipt: writes an envelope spend and/or expense with the user-confirmed values |
+| `POST` | `/api/receipts/:id/dismiss` | Retire a pending receipt without logging anything |
 
 ### Cash flow response shape
 
@@ -101,6 +109,30 @@ sudo bash /opt/limofin/scripts/update.sh
   "coverage_pct": 66
 }
 ```
+
+---
+
+## Companion PWA (v0.3)
+
+Mobile-first PWA served at **`http://10.117.1.82:3002/m/`**. On the iPhone: open in Safari on home Wi-Fi → Share → **Add to Home Screen**. Three tabs:
+
+- **Today** — safe-to-spend today (`remaining envelopes ÷ days left`), spent today, per-envelope bars with pace (on pace / running hot / under pace / over), plan flags, cash-floor vs runway-low chip, and bills due in the next 7 days with their earmark traffic light.
+- **Scan** — snap a receipt; the photo is downscaled on-device and uploaded. With `ANTHROPIC_API_KEY` set in `data/.env`, Claude parses merchant/date/total/envelope as a **suggestion you confirm** — nothing is ever logged without a tap on "Log it". Committing writes an envelope spend and/or an expense-ledger row. Offline (out of the house), receipts queue in IndexedDB and sync when you're back on home Wi-Fi.
+- **Trends** — 28-day daily burn, spent-vs-allocated per week with adherence %, weekday pattern, top merchants, and the month's expense ledger by category.
+
+The app shell is cached by a service worker and the last glance is cached locally, so the app opens (with an "as of" stamp) even off-LAN.
+
+**AI receipt parsing** is optional: without a key the scan flow falls back to manual entry. To enable, on LXC 105 add to `/opt/limofin/data/.env`:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+# optional, defaults to claude-haiku-4-5-20251001
+# RECEIPT_MODEL=...
+```
+
+then `systemctl restart limofin`. Receipt images are stored in `data/receipts/` (gitignored).
+
+**Lock-screen / home-screen widget:** `scripts/limofin-widget.js` is a [Scriptable](https://scriptable.app) script — paste it into the free Scriptable app, add a widget, pick the script. Shows safe-to-spend + envelope bars, cached for off-LAN.
 
 ---
 

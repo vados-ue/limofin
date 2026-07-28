@@ -8,3 +8,4 @@ data/.env
 coverage/
 .env
 data/*.bak.*
+data/receipts/

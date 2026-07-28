@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>LimoFin</title>
+  <meta name="theme-color" content="#0f1115">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LimoFin">
+  <link rel="manifest" href="/m/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/m/icons/icon-180.png">
+  <link rel="icon" type="image/png" href="/m/icons/icon-192.png">
+  <link rel="stylesheet" href="/m/m.css">
+</head>
+<body>
+  <header class="mast">
+    <div class="mast-title">
+      <span class="logo-dot"></span>
+      <h1>LimoFin</h1>
+    </div>
+    <div class="mast-right">
+      <span id="queueBadge" class="queue-badge" hidden></span>
+      <span id="netDot" class="net-dot" title="Server reachability"></span>
+    </div>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="today">
+      <span class="tab-ico">◉</span><span>Today</span>
+    </button>
+    <button class="tab-btn" data-tab="scan">
+      <span class="tab-ico">▣</span><span>Scan</span>
+    </button>
+    <button class="tab-btn" data-tab="trends">
+      <span class="tab-ico">∿</span><span>Trends</span>
+    </button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+  <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
+
+  <script src="/m/m.js"></script>
+</body>
+</html>
