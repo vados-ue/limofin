@@ -9,3 +9,5 @@ coverage/
 .env
 data/*.bak.*
 data/receipts/
+ios/LimoFin.xcodeproj/xcuserdata/
+ios/LimoFin.xcodeproj/project.xcworkspace/xcuserdata/
